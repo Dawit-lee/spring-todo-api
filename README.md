@@ -38,6 +38,7 @@ Windows에서는 `gradlew.bat bootRun`을 사용합니다.
 테스트는 별도 메모리 H2 DB를 사용하므로 로컬 실행 데이터에 영향을 주지 않습니다.
 애플리케이션 컨텍스트 로딩 테스트와 `@DataJpaTest` 기반 저장·조회·수정·삭제 및 제목 제약조건 테스트가 포함되어 있습니다.
 `@SpringBootTest`·MockMvc 통합 테스트에서는 정상 CRUD 흐름, 완료·미완료 전환, 입력 검증, 없는 ID의 조회·수정·삭제, 잘못된 JSON·경로·HTTP 메서드·Content-Type을 검증합니다.
+페이지 경계·빈 결과·완료 여부 필터·잘못된 조회 조건과 OpenAPI 명세·Swagger UI 제공 여부도 검증합니다.
 
 ## 할 일 데이터 모델
 
@@ -59,7 +60,7 @@ Windows에서는 `gradlew.bat bootRun`을 사용합니다.
 | 기능 | 메서드 | 주소 | 요청 본문 | 성공 응답 | 오류 |
 | --- | --- | --- | --- | --- | --- |
 | 생성 | POST | `/api/todos` | `{"title":"Spring 공부"}` | 201, 할 일 객체 + Location 헤더 | 400 |
-| 목록 | GET | `/api/todos` | 없음 | 200, 할 일 객체 배열(없으면 `[]`) | — |
+| 목록 | GET | `/api/todos?page=0&size=20&completed=false` | 없음 | 200, 페이지 객체 | 400 |
 | 단건 | GET | `/api/todos/{id}` | 없음 | 200, 할 일 객체 | 400, 404 |
 | 수정·완료 변경 | PUT | `/api/todos/{id}` | `{"title":"Spring 복습","completed":true}` | 200, 수정된 할 일 객체 | 400, 404 |
 | 삭제 | DELETE | `/api/todos/{id}` | 없음 | 204, 본문 없음 | 400, 404 |
@@ -67,14 +68,33 @@ Windows에서는 `gradlew.bat bootRun`을 사용합니다.
 성공 응답의 할 일 객체는 다음 모양입니다.
 
 ```json
-{"id":1,"title":"Spring 공부","completed":false,"createdAt":"2026-09-26T13:13:06.042815Z"}
+{"id":1,"title":"Spring 공부","completed":false,"createdAt":"2026-09-26T13:21:36.654411Z"}
 ```
 
 - 생성 시 제목이 필수이며, 완료 여부는 항상 `false`로 시작합니다. ID와 생성 시각은 서버가 정합니다.
 - 제목은 1~200자이며 비어 있거나 공백뿐이면 400입니다. 앞뒤 공백은 자동으로 제거하지 않습니다.
 - 수정 시 제목과 `completed`가 모두 필수입니다. `completed`에 `false`를 보내면 미완료로 변경합니다. ID와 생성 시각은 수정하지 않습니다.
-- 목록은 ID 오름차순입니다. 페이지 나누기와 완료 여부 필터는 아직 제공하지 않습니다.
+- 목록은 ID 오름차순이며 페이지 나누기와 완료 여부 필터를 지원합니다. 목록 응답은 기존 배열에서 `content`와 페이지 정보를 포함하는 객체로 변경되었습니다.
 - 없는 ID의 조회·수정·삭제는 404입니다. 요청 형식이 잘못된 경우에는 입력 검증이 먼저 실행되어 400이 반환될 수 있습니다.
+
+### 목록 조회 조건과 응답
+
+| 쿼리 파라미터 | 기본값 | 규칙 |
+| --- | --- | --- |
+| page | 0 | 0부터 시작하는 페이지 번호, 음수 불가 |
+| size | 20 | 페이지당 항목 수, 1~100 |
+| completed | 생략 | `true`: 완료, `false`: 미완료, 생략하면 전체 |
+
+DB에서 완료 여부를 필터링한 뒤 페이지를 조회합니다. ID 오름차순으로 정렬해 같은 데이터의 조회 순서를 일정하게 유지합니다.
+`totalElements`와 `totalPages`는 필터에 해당하는 전체 결과 기준입니다. 범위를 벗어난 페이지는 200과 빈 `content`를 반환합니다.
+조회 결과 자체가 없으면 `totalElements`와 `totalPages`는 0입니다.
+
+```json
+{"content":[],"page":0,"size":20,"totalElements":0,"totalPages":0}
+```
+
+`page`, `size`, `totalElements`, `totalPages`는 각각 현재 페이지, 요청한 페이지 크기, 전체 항목 수, 전체 페이지 수입니다.
+JPA의 Page를 직접 노출하지 않고 `TodoPageResponse`로 응답 모양을 고정합니다. 페이지 크기의 상한은 한 번에 과도한 데이터를 읽지 않도록 100으로 정했습니다.
 
 ### 공통 오류 응답
 
@@ -90,7 +110,7 @@ Windows에서는 `gradlew.bat bootRun`을 사용합니다.
 
 | 상태 | 발생 조건 |
 | --- | --- |
-| 400 | 제목·완료 여부 검증 실패, 잘못된 JSON, 정수로 해석할 수 없는 ID |
+| 400 | 제목·완료 여부 검증 실패, 잘못된 JSON, 정수로 해석할 수 없는 ID, 잘못된 조회 조건 |
 | 404 | 없는 할 일 ID 또는 없는 주소 |
 | 405 | 해당 주소에서 지원하지 않는 HTTP 메서드 |
 | 406 | 지원하지 않는 응답 형식 요청 |
@@ -105,6 +125,17 @@ Windows에서는 `gradlew.bat bootRun`을 사용합니다.
 - PUT은 사용자가 수정할 수 있는 제목·완료 여부를 함께 지정합니다. 같은 요청을 반복해도 최종 상태가 같고, 수정 결과를 확인하도록 200과 객체를 반환합니다.
 - DELETE는 삭제 성공 후 전달할 데이터가 없어 204를 반환합니다. 이미 삭제한 ID는 존재하지 않으므로 이후 요청은 404입니다.
 - 입력 오류는 클라이언트가 고칠 수 있도록 400과 이유를, 없는 리소스는 404를 반환합니다.
+
+## OpenAPI / Swagger
+
+서버 실행 후 다음 주소를 엽니다.
+
+- Swagger UI: http://localhost:8080/swagger-ui/index.html (`/swagger-ui.html`도 사용 가능)
+- OpenAPI JSON: http://localhost:8080/v3/api-docs
+
+Swagger UI에서 엔드포인트를 펼치고 **Try it out → Execute**로 직접 요청할 수 있습니다.
+CRUD, 페이지·필터 파라미터, 요청·응답 DTO, 공통 오류 응답을 문서화하며 내부 `/error` 경로는 제외합니다.
+Spring Boot 3.5와 호환되는 springdoc 2.8.17을 사용합니다([공식 호환표](https://springdoc.org/v2/)).
 
 ## 실제 curl 실행 결과
 
@@ -128,7 +159,7 @@ HTTP/1.1 201
 Location: /api/todos/1
 Content-Type: application/json
 
-{"id":1,"title":"Spring 공부","completed":false,"createdAt":"2026-09-26T13:13:06.042815Z"}
+{"id":1,"title":"Spring 공부","completed":false,"createdAt":"2026-09-26T13:21:36.654411Z"}
 ```
 
 ### 2. 목록 조회
@@ -141,7 +172,7 @@ curl -i http://localhost:18081/api/todos
 HTTP/1.1 200
 Content-Type: application/json
 
-[{"id":1,"title":"Spring 공부","completed":false,"createdAt":"2026-09-26T13:13:06.042815Z"}]
+{"content":[{"id":1,"title":"Spring 공부","completed":false,"createdAt":"2026-09-26T13:21:36.654411Z"}],"page":0,"size":20,"totalElements":1,"totalPages":1}
 ```
 
 ### 3. 완료 처리
@@ -155,7 +186,20 @@ curl -i -X PUT http://localhost:18081/api/todos/1 \
 HTTP/1.1 200
 Content-Type: application/json
 
-{"id":1,"title":"Spring 공부","completed":true,"createdAt":"2026-09-26T13:13:06.042815Z"}
+{"id":1,"title":"Spring 공부","completed":true,"createdAt":"2026-09-26T13:21:36.654411Z"}
+```
+
+완료 여부 필터와 페이지 크기를 함께 적용한 실제 요청·응답:
+
+```bash
+curl -i 'http://localhost:18081/api/todos?page=0&size=1&completed=true'
+```
+
+```http
+HTTP/1.1 200
+Content-Type: application/json
+
+{"content":[{"id":1,"title":"Spring 공부","completed":true,"createdAt":"2026-09-26T13:21:36.654411Z"}],"page":0,"size":1,"totalElements":1,"totalPages":1}
 ```
 
 ### 4. 삭제
@@ -193,4 +237,17 @@ HTTP/1.1 404
 Content-Type: application/json
 
 {"status":404,"message":"할 일을 찾을 수 없습니다. id=1","errors":[]}
+```
+
+### 7. 잘못된 페이지 번호(400)
+
+```bash
+curl -i 'http://localhost:18081/api/todos?page=-1'
+```
+
+```http
+HTTP/1.1 400
+Content-Type: application/json
+
+{"status":400,"message":"조회 조건이 올바르지 않습니다.","errors":[{"field":"page","message":"page는 0 이상이어야 합니다."}]}
 ```

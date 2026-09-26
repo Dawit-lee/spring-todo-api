@@ -45,7 +45,7 @@ class TodoApiTests {
 
     @Test
     void createsListsReadsUpdatesAndDeletesTodo() throws Exception {
-        mvc.perform(get("/api/todos")).andExpect(status().isOk()).andExpect(jsonPath("$").isEmpty());
+        mvc.perform(get("/api/todos")).andExpect(status().isOk()).andExpect(jsonPath("$.content").isEmpty());
 
         String body = mvc.perform(post("/api/todos").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"Spring 공부\"}"))
@@ -59,8 +59,8 @@ class TodoApiTests {
         String path = "/api/todos/" + id;
 
         mvc.perform(get("/api/todos"))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
-                .andExpect(jsonPath("$[0].id").value(id));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].id").value(id));
         mvc.perform(get(path)).andExpect(status().isOk()).andExpect(jsonPath("$.id").value(id));
 
         mvc.perform(put(path).contentType(MediaType.APPLICATION_JSON)
@@ -82,7 +82,7 @@ class TodoApiTests {
         mvc.perform(delete(path)).andExpect(status().isNoContent())
                 .andExpect(result -> assertThat(result.getResponse().getContentAsString()).isEmpty());
         mvc.perform(get(path)).andExpect(status().isNotFound());
-        mvc.perform(get("/api/todos")).andExpect(jsonPath("$").isEmpty());
+        mvc.perform(get("/api/todos")).andExpect(jsonPath("$.content").isEmpty());
     }
 
     @Test
@@ -142,6 +142,67 @@ class TodoApiTests {
                     .andExpect(jsonPath("$.message").value("할 일을 찾을 수 없습니다. id=999999"))
                     .andExpect(jsonPath("$.errors").isEmpty());
         }
+    }
+
+    @Test
+    void paginatesAndFiltersInDatabase() throws Exception {
+        Todo first = repository.saveAndFlush(new Todo("첫 번째"));
+        Todo second = new Todo("완료된 일");
+        second.changeCompletion(true);
+        repository.saveAndFlush(second);
+        Todo third = repository.saveAndFlush(new Todo("세 번째"));
+
+        mvc.perform(get("/api/todos"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.page").value(0))
+                .andExpect(jsonPath("$.size").value(20)).andExpect(jsonPath("$.totalElements").value(3))
+                .andExpect(jsonPath("$.content[0].id").value(first.getId()));
+        mvc.perform(get("/api/todos").param("page", "1").param("size", "2"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].id").value(third.getId()))
+                .andExpect(jsonPath("$.page").value(1)).andExpect(jsonPath("$.size").value(2))
+                .andExpect(jsonPath("$.totalElements").value(3)).andExpect(jsonPath("$.totalPages").value(2));
+        mvc.perform(get("/api/todos").param("completed", "true"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].id").value(second.getId()))
+                .andExpect(jsonPath("$.totalElements").value(1));
+        mvc.perform(get("/api/todos").param("completed", "false").param("page", "1").param("size", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.content[0].id").value(third.getId()))
+                .andExpect(jsonPath("$.totalElements").value(2)).andExpect(jsonPath("$.totalPages").value(2));
+        mvc.perform(get("/api/todos").param("page", "99"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.content").isEmpty())
+                .andExpect(jsonPath("$.totalElements").value(3));
+        mvc.perform(get("/api/todos").param("size", "100"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.size").value(100));
+        repository.deleteAll();
+        mvc.perform(get("/api/todos").param("completed", "true"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.content").isEmpty())
+                .andExpect(jsonPath("$.totalElements").value(0)).andExpect(jsonPath("$.totalPages").value(0));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"page=-1", "size=0", "size=101", "page=abc", "size=abc", "completed=wrong"})
+    void rejectsInvalidListQuery(String query) throws Exception {
+        String[] pair = query.split("=");
+        mvc.perform(get("/api/todos").param(pair[0], pair[1]))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.message").isString()).andExpect(jsonPath("$.errors").isArray());
+    }
+
+    @Test
+    void documentsPublicEndpointsAndServesSwaggerUi() throws Exception {
+        mvc.perform(get("/v3/api-docs"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.info.title").value("할 일 API"))
+                .andExpect(jsonPath("$.paths['/api/todos'].get.parameters.length()").value(3))
+                .andExpect(jsonPath("$.paths['/api/todos'].post.responses['201']").exists())
+                .andExpect(jsonPath("$.paths['/api/todos/{id}'].delete.responses['204']").exists())
+                .andExpect(jsonPath("$.paths['/api/todos/{id}'].get.responses['404'].content['application/json'].schema['$ref']")
+                        .value("#/components/schemas/ApiError"))
+                .andExpect(jsonPath("$.components.schemas.TodoPageResponse").exists())
+                .andExpect(jsonPath("$.components.schemas.ApiError").exists())
+                .andExpect(jsonPath("$.paths['/error']").doesNotExist());
+        mvc.perform(get("/swagger-ui.html")).andExpect(status().is3xxRedirection());
+        mvc.perform(get("/swagger-ui/index.html")).andExpect(status().isOk());
     }
 
     @Test

@@ -1,6 +1,8 @@
 package com.example.demo.todo;
 
-import java.util.List;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import com.example.demo.todo.dto.TodoPageResponse;
 
 import com.example.demo.todo.dto.CreateTodoRequest;
 import com.example.demo.todo.dto.TodoResponse;
@@ -24,10 +26,12 @@ public class TodoService {
         return TodoResponse.from(todoRepository.save(new Todo(request.title())));
     }
 
-    public List<TodoResponse> findAll() {
-        return todoRepository.findAll(Sort.by("id").ascending()).stream()
-                .map(TodoResponse::from)
-                .toList();
+    public TodoPageResponse findAll(int page, int size, Boolean completed) {
+        PageRequest pageable = PageRequest.of(page, size, Sort.by("id").ascending());
+        Page<Todo> result = completed == null
+                ? todoRepository.findAll(pageable)
+                : todoRepository.findByCompleted(completed, pageable);
+        return TodoPageResponse.from(result);
     }
 
     public TodoResponse findById(Long id) {

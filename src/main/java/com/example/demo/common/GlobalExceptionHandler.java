@@ -10,6 +10,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
@@ -34,6 +35,21 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 .map(error -> new ApiError.FieldError(error.getField(), error.getDefaultMessage()))
                 .toList();
         return new ResponseEntity<>(new ApiError(400, "입력값이 올바르지 않습니다.", errors), headers, status);
+    }
+
+    @Override
+    protected ResponseEntity<Object> handleHandlerMethodValidationException(
+            HandlerMethodValidationException exception, HttpHeaders headers,
+            HttpStatusCode status, WebRequest request) {
+        if (exception.isForReturnValue()) {
+            return handleExceptionInternal(exception, null, headers, status, request);
+        }
+        List<ApiError.FieldError> errors = exception.getParameterValidationResults().stream()
+                .flatMap(result -> result.getResolvableErrors().stream().map(error ->
+                        new ApiError.FieldError(result.getMethodParameter().getParameterName(),
+                                error.getDefaultMessage())))
+                .toList();
+        return new ResponseEntity<>(new ApiError(400, "조회 조건이 올바르지 않습니다.", errors), headers, status);
     }
 
     @Override
